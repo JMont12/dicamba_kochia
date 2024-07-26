@@ -3,23 +3,19 @@ QTL mapping of dicamba resistance using RADseq of segregating F3 plants.
 
 #Written by Jake Montgomery
 #started 11-1-2021
-#This file outlines the commands run to conduct variant calling on a set of Bassia scoparia samples segregating for dicamba resistance (two F3 families, 4-1-1 and 4-5-10)
-#the parent sequences are included as well as an F1 and F2 sample
 
-#I started by trimmming the raw, demultiplexed reads on my laptop with trim_kochia_reads.sh this script can be found in the ~/Desktop/Jake/scripts folder
-#file paths will need to be changed to run this command, but the settings for trimmomatic should be alright
+#This file outlines the commands run to conduct variant calling on a set of Bassia scoparia samples segregating for dicamba resistance (two F3 families, 4-1-1 and 4-5-10). The parent sequences are included as well as an F1 and F2 sample
+
+#I started by trimmming the raw, demultiplexed reads on my laptop with trim_kochia_reads.sh. file paths will need to be changed to run this command, but the settings for trimmomatic should be alright.
 
 ~/Documents/Scripts/trim_kochia_reads.sh
 
-#I aligned the trimmed reads to the Bs_v2_softmasked genome with BWA (genome available from https://www.biorxiv.org/content/10.1101/2023.05.26.542497v1)
+#I aligned the trimmed reads to the Bs_v2_softmasked genome with BWA (genome available from https://www.biorxiv.org/content/10.1101/2023.05.26.542497v1). This script aligns each sample to the reference genome, adds a read group (@RG) header line to each file with the name of the sample, and converts the sam file into a bam file.
 
 bwa index ~/Desktop/Jake/M32_GBS/genome/Bs_v2_soft.mask.fasta
 ~/Desktop/Jake/scripts/align_M32_reads.sh
 
-#this script aligns each sample to the reference genome, adds a read group (@RG) header line to each file with the name of the sample, and converts the sam file into a bam file.
-
-#use docker to start up the GATK container and use a mounted volume to access data outside of the GATK container. This needs to be done as root.
-#make sure that this directory includes your alignment (.bam) files and the reference genome fasta file
+#use docker to start up the GATK container and use a mounted volume to access data outside of the GATK container. This needs to be done as root. Make sure that this directory includes your alignment (.bam) files and the reference genome fasta file
 
 su
 docker run -v /home/exx/Desktop/Jake/M32_GBS/aligned_reads:/gatk/my_data -it broadinstitute/gatk:4.2.0.0
@@ -41,6 +37,7 @@ rm /gatk/my_data/*.bam
 mv gatk/my_data/sorted_bams/* gatk/my_data/
 
 #use this shell script to go through and do the variant calling on each sample individually. I split up the samples to run them in parallel since multithreading is not yet an option in HaplotypCaller
+
 #Each sample took ~ 20 minutes to run
 
 nohup make_gvcf_files_0.sh > gvcf_0_out.txt 2>&1 &
@@ -54,8 +51,7 @@ nohup make_gvcf_files_7.sh > gvcf_7_out.txt 2>&1 &
 nohup make_gvcf_files_8.sh > gvcf_8_out.txt 2>&1 &
 nohup make_gvcf_files_9.sh > gvcf_9_out.txt 2>&1 &
 
-#combine gvcf files in preparation for genotyping
-#One argument file has all the individual vcf files with a -V flag before each one (-V M32_parent_D05_S321.g.vcf.gz -V 7710_parent_D03_S319.g.vcf.gz ....) and the other has all chromosome names with an -L flag (-L 1 -L 2 ...)
+#Combine gvcf files in preparation for genotyping. One argument file has all the individual vcf files with a -V flag before each one (-V M32_parent_D05_S321.g.vcf.gz -V 7710_parent_D03_S319.g.vcf.gz ....) and the other has all chromosome names with an -L flag (-L 1 -L 2 ...)
 
 nohup gatk GenomicsDBImport --genomicsdb-workspace-path ./my_database --arguments_file ./samples.txt --arguments_file ./intervals.list -R ./Bs_v2_soft.mask.fasta > nohup_combine_gvcf.out
 
@@ -68,22 +64,19 @@ gatk GenotypeGVCFs -R Bs_v2_soft.mask.fasta -V gendb://my_database -O combined.v
 gatk SelectVariants -V combined.vcf -select-type SNP -O combined_SNPs.vcf
 gatk SelectVariants -V combined.vcf -select-type MIXED -O combined_mixed.vcf
 
-#run hard filtering on the two variant types individually
-#great resource for selecting flitering criteria: https://gatk.broadinstitute.org/hc/en-us/articles/360035890471-Hard-filtering-germline-short-variants
+#run hard filtering on the two variant types individually. A great resource for selecting flitering criteria: https://gatk.broadinstitute.org/hc/en-us/articles/360035890471-Hard-filtering-germline-short-variants
 
 gatk VariantFiltration -V combined_SNPs.vcf -filter "QD < 2.0" --filter-name "QD2" -filter "QUAL < 30.0" --filter-name "QUAL30" -filter "SOR > 4.0" --filter-name "SOR4" -filter "FS > 20.0" --filter-name "FS20" -filter "MQ < 59.0" --filter-name "MQ59" -O snps_filtered_1.vcf
 
 gatk VariantFiltration -V combined_mixed.vcf -filter "QD < 2.0" --filter-name "QD2" -filter "QUAL < 30.0" --filter-name "QUAL30" -filter "FS > 200.0" --filter-name "FS200" -O mixed_filtered.vcf
 
-#I moved the filtered vcf files back to my laptop and used the extractGT function in vcfR to pull out just the genotypes. The code to do this is in the M32_qtl_mapping.Rmd script.
-#I printed this to a file "M32_genotypes.csv"
-#I used the following bash command to keep only the markers that were different and homozygous between parents
+#I moved the filtered vcf files back to my laptop and used the extractGT function in vcfR to pull out just the genotypes. The code to do this is in the M32_qtl_mapping.Rmd script. I printed this to a file "M32_genotypes.csv" and used the following bash commands to keep only the markers that were different and homozygous between parents
 
 grep '77' M32_genotypes.csv > M32_homozygous_snps.csv
 
 grep -v '77' M32_genotypes.csv| sed 's/,/\t/g' | awk '{a = $318; b=$319; if (a!=b) print $0}'| awk '{a = $318; if (a!="NA") print $0}'| awk '{a = $319; if (a!="NA") print $0}'| awk '{a = $318; if (a!="0/1") print $0}'| awk '{a = $318; if (a!="0|1") print $0}'| awk '{a = $318; if (a!="1|0") print $0}'| awk '{a = $319; if (a!="0/1") print $0}'| awk '{a = $319; if (a!="0|1") print $0}'| awk '{a = $319; if (a!="1|0") print $0}'| sed 's/\t/,/g' >> M32_homozygous_snps.csv
 
-#I opened a head file of M32_genotypes and copied the header line with the sample names and pasted it at the top of the M32_homozygous_snps.csv file 
+#I opened a head file of M32_genotypes.csv and copied the header line with the sample names and pasted it at the top of the M32_homozygous_snps.csv file 
 
 #I used the following command to split the samples from 4-1-1 and 4-5-10 up into their own files, each with the parents included 
 
@@ -135,7 +128,7 @@ grep '	PASS' snps_filtered_1.vcf >> snps_passing_1.vcf
 ~/Documents/Scripts/filter_snps_by_depth.py ./snps_passing_1.vcf 5 ./snps_passing_depth_1.vcf
 
 #go to the M32_mapping.rmd script in Rstudio and pull out genotypes from the vcf and write them to a file called M32_genotypes_filtered.csv
-#pull out only variants that are homozygous, but heterogeneous in the parents
+#pull out only variants that are segregating, but homozygous in the parents
 
 sed -i '' 's/\"//g' M32_genotypes_filtered.csv
 
