@@ -1,0 +1,142 @@
+---
+title: "Kochia_M32_QTL_mapping"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir="~/Documents/PhD/Dicamba_kochia/11-1-21_GBS")
+```
+
+
+## Extracting genotype information from a vcf file
+
+Here, we take a vcf file that has been filtered, and extract information from the genotype field.
+
+```{r}
+#install.packages('vcfR')
+library(vcfR)
+
+#read in an actual vcf file and convert/save as a vcfR object
+vcf <- read.vcfR( "snps_passing_depth_1.vcf", verbose = FALSE)
+
+#extract the genotypes from the file
+head(vcf[,1:5])
+geno <- extract.gt(vcf)
+geno_df <- as.data.frame(geno, sep = ',')
+head(geno_df[,1:5])
+write.csv(geno_df, file = "M32_genotypes_filtered.csv")
+
+#Assign alleles based on parental genotypes by calling an external python script
+#Arguments IN ORDER: /path/to/python_script.py /path/to/geno_df.csv Name_of_R_parent Name_of_S_parent /path/to/alleles_out.csv
+system('python assign_alleles.py ./M32_4-1-1_homozygous_snps.csv M32_parent_combined 7710_parent_combined ./4-1-1_alleles.csv', wait = FALSE)
+```
+
+## Loading information into a "cross" object using the qtl2 package
+
+```{r}
+library(qtl2)
+#load in the data by calling the control file
+cross <- read_cross2("4-1-1_qtl_control_file.yaml")
+#or analyze the 4-5-10 data
+cross <- read_cross2("4-5-10_qtl_control_file.yaml")
+
+#plot a histogram of visual injury
+hist(cross$pheno, xlab = "Visual injury (%)", main = "Histogram of F3 visual injury")
+
+#calculate allele frequencies of each marker
+g <- do.call("cbind", cross$geno)
+head(g)
+head(colSums(g==1))
+head(colSums(g==2))
+head(colSums(g==3))
+#generate distributions of each genotypes's frequency across all markers
+pASS <- colSums(g==1)  / colSums(g != 0)
+pARR <- colSums(g==3)  / colSums(g != 0)
+hist(pASS, breaks=200)
+hist(pARR, breaks=200)
+PAnull <- colSums(g==0) / (colSums(g==0)+colSums(g==1)+colSums(g==2)+colSums(g==3))
+hist(PAnull, breaks=200)
+
+#drop markers with homozygous allele frequencies of <0.05 and >0.90
+todrop <- names(pASS)[pASS < 0.05 | pASS > 0.9]
+cross_sub1 <- drop_markers(cross, todrop)
+todrop <- names(pARR)[pARR < 0.05 | pARR > 0.9]
+cross_sub2 <- drop_markers(cross, todrop)
+class(todrop)
+```
+
+##Prep the data for a QTL scan and conduct the scan
+
+```{r}
+#calculate genetic probabilities at each marker. Default error rate is .0001
+pr <- calc_genoprob(cross=cross_sub1, map=cross_sub1$gmap, error_prob = .002)
+
+#look at the names of the entries in the pr data structure
+names(pr)
+
+#look at the dimension names for the chromosome 6 array
+dimnames(pr$'chr6')
+
+#view the first three rows of genotype probabilities for a genotyped marker on chromosome 6
+(pr$`chr6`)[1:3,,"chr6_268795"]
+
+#plot the probabilities of individual 1 genotypes across chromosome 6
+plot_genoprob(pr, map=cross_sub1$gmap, ind = 1, chr = "chr4")
+
+#haley-knott regression plots genotype probability on a spectrum (x-axis) and phenotype on the y-axis. A linear regression (including any covariates you provide) will show if there is an effect of genotype on phenotype.
+#perform genome scan using haley-knott regression on the data previously generated
+out <- scan1(genoprobs=pr, pheno =cross$pheno)
+
+#plot the LOD scores for the liver LOD scores
+plot_scan1(out, map = cross$gmap, lodcolumn = "Injury_percentage") + abline(h=3.867117, col = "red", lwd = 2)
+```
+
+## Using permutation to determine a significance threshold for QTL peaks
+
+```{r}
+#Bonferroni correction for multiple testing of LOD scores where 1635 is the number of markers used in the analysis and 1 is df because there were 2 original parents (see Nyholt et al. 2020)
+qchisq(1-0.05/1635, 1) / 2 / log(10)
+#permutation mixes the phenotypes up so there should be no relationship between genotype and phenotype
+#the 95th percentile calculated LOD score from these permutation is considered the 95% confidence threshold for statistical significance 
+operm <- scan1perm(genoprobs = pr, pheno = cross$pheno, n_perm = 1, cores = 7)
+?scan1perm()
+#this outputs a list of the maximum LOD score achieved from each permutation
+#plot these values
+{hist(operm[,'biomass'], breaks = 50, xlab = "LOD", main = "LOD scores for biomass scan with threshold in red")
+abline(v = summary(operm)[,'biomass'], col = 'red', lwd = 2)}
+
+#operm has calculated the 95th percentile (5% of random LOD are above this line)
+#return thresholds of different alphas
+summary(operm, alpha= c(.02, .05))
+
+#to find significant peaks, we use the findpeaks function with the scan output, thresholds, and marker map
+#save the permutation data so we can call it later
+thr <- summary(operm)
+
+#find the peaks with 95% confidence (thr) and find the genomic interval that is 95% likely to contain a causative locus (based on a bayesian credible interval)
+find_peaks(scan1_output = out, map = cross$gmap, threshold = thr, prob = 0.95, expand2markers = FALSE)
+
+#if you dont have permutation thresholds, use the bonferroni method
+find_peaks(scan1_output = out, map = cross$gmap, threshold = 3.867117, expand2markers = FALSE)
+
+#find multiple peaks on a chromosome with 'peakdrop' to tell how far the LOD needs to drop between peaks
+find_peaks(scan1_output = out, map = cross$gmap, threshold = thr, peakdrop = 1.8, prob = 0.95, expand2markers = FALSE)
+```
+
+
+```{r}
+#generate linkage map
+kinship <- calc_kinship(pr, cores = 6)
+hist(kinship)
+map <- est_map(cross_sub2, cores = 7, map_function = "morgan")
+?est_map()
+plot(map$chr4-671500~cross_sub2$gmap$chr4)
+plot(map$chr1-61000~cross_sub2$gmap$chr1)
+est_herit(cross$pheno, cores = 7)
+?est_herit()
+fit1(cross_sub1$geno, cross_sub1$pheno, model = "normal")
+class(pr)
+
+```
+
