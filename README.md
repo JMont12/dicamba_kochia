@@ -13,27 +13,32 @@ QTL mapping of dicamba resistance using RADseq of segregating F3 plants.
 #I aligned the trimmed reads to the Bs_v2_softmasked genome with BWA (genome available from https://www.biorxiv.org/content/10.1101/2023.05.26.542497v1). This script aligns each sample to the reference genome, adds a read group (@RG) header line to each file with the name of the sample, and converts the sam file into a bam file.
 
 bwa index ~/Desktop/Jake/M32_GBS/genome/Bs_v2_soft.mask.fasta
+
 ~/Desktop/Jake/scripts/align_M32_reads.sh
 
 #use docker to start up the GATK container and use a mounted volume to access data outside of the GATK container. This needs to be done as root. Make sure that this directory includes your alignment (.bam) files and the reference genome fasta file
 
 su
+
 docker run -v /home/exx/Desktop/Jake/M32_GBS/aligned_reads:/gatk/my_data -it broadinstitute/gatk:4.2.0.0
 
 #use picard tools to generate a dictionary (.dict) file for the reference
 
 cd my_data
 gatk CreateSequenceDictionary -R /gatk/my_data/Bs_v2_soft.mask.fasta -O /gatk/my_data/Bs_v2_soft.mask.dict
+
 samtools faidx /gatk/my_data/Bs_v2_soft.mask.fasta
 
 #call this script to sort the bams, mark duplicate reads, and make index files
 
 mkdir sorted_bams
+
 /gatk/my_data/sort_and_mark.sh
 
 #remove the raw bam files and move the sorted bams with their index files to the working directory
 
 rm /gatk/my_data/*.bam
+
 mv gatk/my_data/sorted_bams/* gatk/my_data/
 
 #use this shell script to go through and do the variant calling on each sample individually. I split up the samples to run them in parallel since multithreading is not yet an option in HaplotypCaller
@@ -41,14 +46,23 @@ mv gatk/my_data/sorted_bams/* gatk/my_data/
 #Each sample took ~ 20 minutes to run
 
 nohup make_gvcf_files_0.sh > gvcf_0_out.txt 2>&1 &
+
 nohup make_gvcf_files_1.sh > gvcf_1_out.txt 2>&1 &
+
 nohup make_gvcf_files_2.sh > gvcf_2_out.txt 2>&1 &
+
 nohup make_gvcf_files_3.sh > gvcf_3_out.txt 2>&1 &
+
 nohup make_gvcf_files_4.sh > gvcf_4_out.txt 2>&1 &
+
 nohup make_gvcf_files_5.sh > gvcf_5_out.txt 2>&1 &
+
 nohup make_gvcf_files_6.sh > gvcf_6_out.txt 2>&1 &
+
 nohup make_gvcf_files_7.sh > gvcf_7_out.txt 2>&1 &
+
 nohup make_gvcf_files_8.sh > gvcf_8_out.txt 2>&1 &
+
 nohup make_gvcf_files_9.sh > gvcf_9_out.txt 2>&1 &
 
 #Combine gvcf files in preparation for genotyping. One argument file has all the individual vcf files with a -V flag before each one (-V M32_parent_D05_S321.g.vcf.gz -V 7710_parent_D03_S319.g.vcf.gz ....) and the other has all chromosome names with an -L flag (-L 1 -L 2 ...)
@@ -62,6 +76,7 @@ gatk GenotypeGVCFs -R Bs_v2_soft.mask.fasta -V gendb://my_database -O combined.v
 #separate SNP and indel/mixed variant sites
 
 gatk SelectVariants -V combined.vcf -select-type SNP -O combined_SNPs.vcf
+
 gatk SelectVariants -V combined.vcf -select-type MIXED -O combined_mixed.vcf
 
 #run hard filtering on the two variant types individually. A great resource for selecting flitering criteria: https://gatk.broadinstitute.org/hc/en-us/articles/360035890471-Hard-filtering-germline-short-variants
@@ -81,6 +96,7 @@ grep -v '77' M32_genotypes.csv| sed 's/,/\t/g' | awk '{a = $318; b=$319; if (a!=
 #I used the following command to split the samples from 4-1-1 and 4-5-10 up into their own files, each with the parents included 
 
 cut -d ',' -f 1-212,318,319 M32_homozygous_snps.csv > M32_4-1-1_homozygous_snps.csv
+
 cut -d ',' -f 1,214-316,318,319 M32_homozygous_snps.csv > M32_4-5-10_homozygous_snps.csv
 
 #I ran the assign_alleles.py script on both F3 family files to translate 1's and 0's into R's and S's
@@ -92,6 +108,7 @@ cut -d ',' -f 1,214-316,318,319 M32_homozygous_snps.csv > M32_4-5-10_homozygous_
 #I trimmed off some junk at the end of the sample names from the genotyping to be congruent with the phenotyping names
 
 sed -E 's/_[A-Z][0-9]+_R1_001//g' 4-1-1_alleles.csv
+
 sed -E 's/_[A-Z][0-9]+_R1_001//g' 4-5-10_alleles.csv
 
 #I copied the sample phenotype information from "Copy of Progeny test M32 dicamba resistant_07252020.xlsx" to "4-1-1_pheno.csv" and "4-5-10_pheno.csv" respectively.
@@ -121,6 +138,7 @@ gatk VariantFiltration -V combined_mixed.vcf -filter "QD < 2.0" --filter-name "Q
 #I moved the new filtered snp set back to my computer and pulled out only snps passing the filters
 
 grep '#' snps_filtered_1.vcf > snps_passing_1.vcf
+
 grep '	PASS' snps_filtered_1.vcf >> snps_passing_1.vcf
 
 #convert any genotypes supported by less than 5 reads to ./. This should reduce the amount of true heterozygote that get pushed to be homozygous.
@@ -151,6 +169,7 @@ cut -d ',' -f 1,213-319 M32_homozygous_filtered_snps.csv > M32_4-5-10_homozygous
 #I trimmed off some junk at the end of the sample names from the genotyping to be congruent with the phenotyping names
 
 sed -i '' -E 's/_[A-Z][0-9]+_R1_001//g' 4-1-1_filtered_alleles.csv
+
 sed -i '' -E 's/_[A-Z][0-9]+_R1_001//g' 4-5-10_filtered_alleles.csv
 
 #you will need to change the geno file name in the control.yaml file to be 4-1-1_filtered_alleles.csv at this point
